@@ -326,12 +326,49 @@
             storageBucket: "discordunknow-54ce9.firebasestorage.app",
             messagingSenderId: "571989738366",
             appId: "1:571989738366:web:009545030d8cbcfc11292f",
-            measurementId: "G-25J7QG5SM5"
+            measurementId: "G-25J7QG5SM5",
+            databaseURL: "https://discordunknow-54ce9-default-rtdb.asia-southeast1.firebasedatabase.app/"
         };
       
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
-        const playlistRef = ref(db, 'playlist');
+
+        // --- AUTH LOGIC (JWT Parsing) ---
+        let currentUid = null;
+        let playlistRef = null;
+
+        function getUidFromToken() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const token = urlParams.get('token');
+            if (!token) return null;
+            try {
+                // Decode JWT payload (middle part)
+                const base64Url = token.split('.')[1];
+                const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+                const jsonPayload = decodeURIComponent(window.atob(base64).split('').map(function(c) {
+                    return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+                }).join(''));
+                const decoded = JSON.parse(jsonPayload);
+                return decoded.uid;
+            } catch (e) {
+                console.error("Token decode error:", e);
+                return null;
+            }
+        }
+
+        // Initialize
+        currentUid = getUidFromToken();
+        const countSpan = document.getElementById('songCount');
+        
+        if (currentUid) {
+            playlistRef = ref(db, `playlists/${currentUid}`); // User-specific path
+            // countSpan.innerText = "Music Library";
+        } else {
+            console.warn("No UID found in token");
+            document.getElementById('playlist').innerHTML = 
+                '<li style="text-align:center; padding:20px; color:#aaa;">⚠️ ไม่พบ Token ยืนยันตัวตน<br>โปรดใช้คำสั่ง <b>/site</b> ใน Discord เพื่อรับลิงก์เข้าใช้งาน</li>';
+            document.getElementById('openModalBtn').style.display = 'none';
+        }
 
         // --- Helper Functions ---
         function getYouTubeID(url) {
@@ -380,12 +417,14 @@
         const confirmBtn = document.getElementById('confirmAddBtn');
         const input = document.getElementById('modalUrlInput');
 
-        openBtn.onclick = () => { modal.style.display = "flex"; input.focus(); }
-        closeBtn.onclick = () => modal.style.display = "none";
+        if (openBtn) openBtn.onclick = () => { modal.style.display = "flex"; input.focus(); }
+        if (closeBtn) closeBtn.onclick = () => modal.style.display = "none";
         window.onclick = (e) => { if (e.target == modal) modal.style.display = "none"; }
 
         // --- Add Song Logic ---
         async function handleAddSong() {
+            if (!playlistRef) return alert("กรุณาเข้าสู่ระบบผ่านลิงก์จากบอท");
+
             const url = input.value.trim();
             if (!url) return;
 
@@ -408,62 +447,61 @@
             });
         }
 
-        confirmBtn.onclick = handleAddSong;
+        if (confirmBtn) confirmBtn.onclick = handleAddSong;
 
         // --- Render List ---
-        onValue(playlistRef, (snapshot) => {
-            const list = document.getElementById('playlist');
-            list.innerHTML = '';
-            
-            if (!snapshot.exists()) {
-                list.innerHTML = '<li style="padding:20px; text-align:center; color:#555;">ยังไม่มีเพลงในรายการ</li>';
-                return;
-            }
-
-            const data = snapshot.val();
-            // Convert to array and reverse to show newest first
-            const songs = Object.entries(data).reverse(); 
-
-            songs.forEach(([key, val]) => {
-                const li = document.createElement('li');
-                li.className = 'song-item';
+        if (playlistRef) {
+            onValue(playlistRef, (snapshot) => {
+                const list = document.getElementById('playlist');
+                list.innerHTML = '';
                 
-                const title = val.title || val.url || 'Unknown Title';
-                const thumbnail = val.thumbnail || 'https://via.placeholder.com/50x50?text=MP3';
-                const url = val.url || '';
+                if (!snapshot.exists()) {
+                    list.innerHTML = '<li style="padding:20px; text-align:center; color:#555;">ยังไม่มีเพลงในรายการ</li>';
+                    countSpan.innerText = "0 เพลง";
+                    return;
+                }
 
-                li.innerHTML = `
-                    <img src="${thumbnail}" class="song-thumb" alt="cover">
-                    <div class="song-details">
-                        <div class="song-title">${title}</div>
-                        <div class="song-artist">YouTube Audio</div>
-                    </div>
-                    <button class="delete-btn" data-key="${key}">
-                        <i class="fas fa-trash"></i>
-                    </button>
-                `;
+                const data = snapshot.val();
+                const songs = Object.entries(data).reverse(); 
+                countSpan.innerText = `${songs.length} เพลง`;
 
-                // Play on click wrapper
-                li.onclick = (e) => {
-                    // Don't play if clicked delete
-                    if (!e.target.closest('.delete-btn')) {
-                        playVideo(url);
-                    }
-                };
-                
-                // Delete logic
-                const delBtn = li.querySelector('.delete-btn');
-                delBtn.onclick = (e) => {
-                    e.stopPropagation();
-                    if(confirm('ต้องการลบเพลงนี้ใช่ไหม?')) {
-                        remove(ref(db, 'playlist/' + key));
-                    }
-                };
+                songs.forEach(([key, val]) => {
+                    const li = document.createElement('li');
+                    li.className = 'song-item';
+                    
+                    const title = val.title || val.url || 'Unknown Title';
+                    const thumbnail = val.thumbnail || 'https://via.placeholder.com/50x50?text=MP3';
+                    const url = val.url || '';
 
-                list.appendChild(li);
+                    li.innerHTML = `
+                        <img src="${thumbnail}" class="song-thumb" alt="cover">
+                        <div class="song-details">
+                            <div class="song-title">${title}</div>
+                            <div class="song-artist">YouTube Audio</div>
+                        </div>
+                        <button class="delete-btn" data-key="${key}">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    `;
+
+                    li.onclick = (e) => {
+                        if (!e.target.closest('.delete-btn')) {
+                            playVideo(url);
+                        }
+                    };
+                    
+                    const delBtn = li.querySelector('.delete-btn');
+                    delBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        if(confirm('ต้องการลบเพลงนี้ใช่ไหม?')) {
+                            remove(ref(db, `playlists/${currentUid}/${key}`));
+                        }
+                    };
+
+                    list.appendChild(li);
+                });
             });
-        });
-
+        }
     </script>
 </body>
 </html>
